@@ -43,8 +43,7 @@ from utils.general import (LOGGER, NCOLS, check_dataset, check_file, check_git_s
                            check_requirements, check_suffix, check_yaml, colorstr, get_latest_run, increment_path,
                            init_seeds, intersect_dicts, labels_to_class_weights, labels_to_image_weights, methods,
                            one_cycle, print_args, print_mutation, strip_optimizer)
-from utils.loggers import Loggers
-from utils.loggers.wandb.wandb_utils import check_wandb_resume
+# from utils.loggers import Loggers
 from utils.loss import ComputeLoss
 from utils.metrics import fitness
 from utils.plots import plot_evolve, plot_labels
@@ -83,16 +82,16 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     data_dict = None
 
     # Loggers
-    if RANK in [-1, 0]:
-        loggers = Loggers(save_dir, weights, opt, hyp, LOGGER)  # loggers instance
-        if loggers.wandb:
-            data_dict = loggers.wandb.data_dict
-            if resume:
-                weights, epochs, hyp = opt.weights, opt.epochs, opt.hyp
+    # if RANK in [-1, 0]:
+    #     loggers = Loggers(save_dir, weights, opt, hyp, LOGGER)  # loggers instance
+    #     # if loggers.wandb:
+    #     #     data_dict = loggers.wandb.data_dict
+    #     #     if resume:
+    #     #         weights, epochs, hyp = opt.weights, opt.epochs, opt.hyp
 
-        # Register actions
-        for k in methods(loggers):
-            callbacks.register_action(k, callback=getattr(loggers, k))
+    #     # Register actions
+    #     for k in methods(loggers):
+    #         callbacks.register_action(k, callback=getattr(loggers, k))
 
     # Config
     plots = not evolve  # create plots
@@ -113,14 +112,14 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         with torch_distributed_zero_first(LOCAL_RANK):
             weights = attempt_download(weights)  # download if not found locally
         ckpt = torch.load(weights, map_location=device)  # load checkpoint
-        model = Model(cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
-        exclude = ['anchor'] if (cfg or hyp.get('anchors')) and not resume else []  # exclude keys
+        model = Model(cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=opt.anchors).to(device)  # create
+        exclude = ['anchor'] if (cfg or opt.anchors) and not resume else []  # exclude keys
         csd = ckpt['model'].float().state_dict()  # checkpoint state_dict as FP32
         csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
         model.load_state_dict(csd, strict=False)  # load
         LOGGER.info(f'Transferred {len(csd)}/{len(model.state_dict())} items from {weights}')  # report
     else:
-        model = Model(cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
+        model = Model(cfg, ch=3, nc=nc, anchors=opt.anchors).to(device)  # create
 
     # Freeze
     freeze = [f'model.{x}.' for x in range(freeze)]  # layers to freeze
@@ -132,6 +131,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
 
     # Image size
     gs = max(int(model.stride.max()), 32)  # grid size (max stride)
+    # gs=opt.gridsize
     imgsz = check_img_size(opt.imgsz, gs, floor=gs * 2)  # verify imgsz is gs-multiple
 
     # Batch size
@@ -253,7 +253,13 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     model.hyp = hyp  # attach hyperparameters to model
     model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device) * nc  # attach class weights
     model.names = names
+    from thop import profile
 
+    input1 = torch.randn(1, 3, imgsz, imgsz).to(device)
+    print("------------------")
+    macs, params = profile(model, inputs=(input1, ))
+    print("%.2f | %.2f" % (params / (1000 ** 2), macs / (1000 ** 3)))
+    print("---------------")
     # Start training
     t0 = time.time()
     nw = max(round(hyp['warmup_epochs'] * nb), 1000)  # number of warmup iterations, max(3 epochs, 1k iterations)
@@ -379,7 +385,6 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                         'ema': deepcopy(ema.ema).half(),
                         'updates': ema.updates,
                         'optimizer': optimizer.state_dict(),
-                        'wandb_id': loggers.wandb.wandb_run.id if loggers.wandb else None,
                         'date': datetime.now().isoformat()}
 
                 # Save last, best and delete
@@ -443,7 +448,7 @@ def parse_opt(known=False):
     parser.add_argument('--cfg', type=str, default='', help='model.yaml path')
     parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='dataset.yaml path')
     parser.add_argument('--hyp', type=str, default=ROOT / 'data/hyps/hyp.scratch.yaml', help='hyperparameters path')
-    parser.add_argument('--epochs', type=int, default=300)
+    parser.add_argument('--epochs', type=int, default=5)
     parser.add_argument('--batch-size', type=int, default=16, help='total batch size for all GPUs, -1 for autobatch')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='train, val image size (pixels)')
     parser.add_argument('--rect', action='store_true', help='rectangular training')
@@ -471,7 +476,8 @@ def parse_opt(known=False):
     parser.add_argument('--freeze', type=int, default=0, help='Number of layers to freeze. backbone=10, all=24')
     parser.add_argument('--save-period', type=int, default=-1, help='Save checkpoint every x epochs (disabled if < 1)')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
-
+    parser.add_argument('--anchors', type=int, default=3, help='anchors')
+    # parser.add_argument('--gridsize',type=int,default=32,help='grid size')
     # Weights & Biases arguments
     parser.add_argument('--entity', default=None, help='W&B: Entity')
     parser.add_argument('--upload_dataset', action='store_true', help='W&B: Upload dataset as artifact table')
@@ -484,13 +490,13 @@ def parse_opt(known=False):
 
 def main(opt, callbacks=Callbacks()):
     # Checks
-    if RANK in [-1, 0]:
-        print_args(FILE.stem, opt)
-        check_git_status()
-        check_requirements(exclude=['thop'])
+    # if RANK in [-1, 0]:
+    #     print_args(FILE.stem, opt)
+    #     check_git_status()
+    #     check_requirements(exclude=['thop'])
 
     # Resume
-    if opt.resume and not check_wandb_resume(opt) and not opt.evolve:  # resume an interrupted run
+    if opt.resume  and not opt.evolve:  # resume an interrupted run
         ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run()  # specified or most recent path
         assert os.path.isfile(ckpt), 'ERROR: --resume checkpoint does not exist'
         with open(Path(ckpt).parent.parent / 'opt.yaml', errors='ignore') as f:
