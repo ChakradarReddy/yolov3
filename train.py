@@ -213,6 +213,8 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                                               hyp=hyp, augment=True, cache=opt.cache, rect=opt.rect, rank=LOCAL_RANK,
                                               workers=workers, image_weights=opt.image_weights, quad=opt.quad,
                                               prefix=colorstr('train: '), shuffle=True)
+#     print("--trainloader",len(train_loader))
+#     print("--dataset",len(dataset))
     mlc = int(np.concatenate(dataset.labels, 0)[:, 0].max())  # max label class
     nb = len(train_loader)  # number of batches
     assert mlc < nc, f'Label class {mlc} exceeds nc={nc} in {data}. Possible class labels are 0-{nc - 1}'
@@ -255,7 +257,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     model.names = names
     from thop import profile
 
-    input1 = torch.randn(1, 3, imgsz, imgsz).to(device)
+    input1 = torch.randn(len(dataset), 3, imgsz, imgsz).to(device)
     print("------------------")
     macs, params = profile(model, inputs=(input1, ))
     print("%.2f | %.2f" % (params / (1000 ** 2), macs / (1000 ** 3)))
